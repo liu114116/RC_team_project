@@ -1,0 +1,27 @@
+# 编译中间文件
+*.o
+*.obj
+*.d
+*.elf
+*.axf
+*.map
+
+# 常见构建目录：确认这些目录确实只有生成文件后再启用
+# build/
+# Debug/
+# Release/
+# Objects/
+# Listings/
+
+# 本地环境与敏感配置
+.env
+
+# 临时文件
+*.tmp
+*.log
+~$*
+
+# LaTeX 中间文件
+*.aux
+*.toc
+*.synctex.gz
