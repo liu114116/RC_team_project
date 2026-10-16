@@ -1,0 +1,32 @@
+# diff all
+# Betaflight / NAZE (AFNA) 3.2.5 Apr  3 2026 / 06:10:58 (6e69ff00c) MSP API: 1.36
+defaults nosave
+
+feature -RX_PPM
+feature RX_SERIAL
+feature MOTOR_STOP
+serial 1 64 115200 57600 0 115200
+aux 0 0 0 1300 2100
+aux 1 1 0 1300 2100
+aux 2 3 1 1300 2100
+set serialrx_provider = SBUS
+set min_throttle = 1
+set min_command = 1
+set motor_pwm_protocol = OFF
+set pid_process_denom = 4
+profile 0
+
+profile 1
+
+profile 2
+
+profile 0
+rateprofile 0
+
+rateprofile 1
+
+rateprofile 2
+
+rateprofile 0
+save
+# 

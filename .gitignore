@@ -25,3 +25,9 @@
 *.aux
 *.toc
 *.synctex.gz
+
+# 手机 App 构建缓存与本地调试签名
+/HC05-MSP/source/build/
+*.jks
+*.keystore
+*.idsig
