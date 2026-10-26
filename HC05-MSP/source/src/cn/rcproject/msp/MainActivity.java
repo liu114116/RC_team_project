@@ -11,7 +11,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import org.json.*;
 
-/** Read-only live telemetry and explicitly isolated design preview. No RC transmission. */
+/** Telemetry and opt-in motor-disconnected RC bench testing. */
 public class MainActivity extends Activity {
  private final Handler ui=new Handler(Looper.getMainLooper());
  private final ExecutorService worker=Executors.newSingleThreadExecutor();
@@ -19,6 +19,10 @@ public class MainActivity extends Activity {
  private volatile BluetoothSocket socket;
  private volatile boolean connected,connecting,active;
  private volatile int generation;
+ private volatile boolean testing;
+ private volatile int rollInput=1500,pitchInput=1500,yawInput=1500;
+ private volatile long lastTouch;
+ private final ScheduledExecutorService rcWorker=Executors.newSingleThreadScheduledExecutor();
  private volatile byte[] rxMap;
  private volatile long lastReply;
  private WebView web;
@@ -26,8 +30,10 @@ public class MainActivity extends Activity {
  private final StringBuilder logs=new StringBuilder();
  private int tick;
  @Override public void onCreate(Bundle b){super.onCreate(b);
+  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+  getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN,WindowManager.LayoutParams.FLAG_FULLSCREEN);
   getWindow().setStatusBarColor(0xfff6f8fa);getWindow().setNavigationBarColor(0xfff6f8fa);
-  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR);
+  getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN|View.SYSTEM_UI_FLAG_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY|View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN|View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION|View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
   web=new WebView(this);web.setBackgroundColor(0xfff6f8fa);setContentView(web);
   web.getSettings().setJavaScriptEnabled(true);
   web.getSettings().setAllowFileAccess(false);web.getSettings().setAllowContentAccess(false);
@@ -35,14 +41,30 @@ public class MainActivity extends Activity {
   web.addJavascriptInterface(new Bridge(),"Native");
   web.setWebViewClient(new WebViewClient(){@Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){return true;}});
   web.loadUrl("file:///android_asset/index.html");
+  rcWorker.scheduleAtFixedRate(()->{
+   if(!testing||!active||!connected)return;
+   if(SystemClock.elapsedRealtime()-lastReply>1500){stopTesting();return;}
+   if(SystemClock.elapsedRealtime()-lastTouch>350){rollInput=pitchInput=yawInput=1500;}
+   synchronized(writeLock){if(!testing||!active||!connected)return;try{send(200,Msp.benchChannels(rxMap,rollInput,pitchInput,yawInput));}catch(Exception e){stopTesting();addLog("通道发送失败："+e.getMessage());}}
+  },0,50,TimeUnit.MILLISECONDS);
  }
+ private void stopTesting(){testing=false;rollInput=pitchInput=yawInput=1500;}
  public final class Bridge {
+  @JavascriptInterface public void testing(boolean enable){ui.post(()->{
+   if(!enable){stopTesting();publish();return;}
+   if(!active||!connected||rxMap==null||SystemClock.elapsedRealtime()-lastReply>1500){addLog("等待飞控应答和有效通道映射");return;}
+   new AlertDialog.Builder(MainActivity.this).setTitle("无电机通道测试").setMessage("确认电机未连接、全部螺旋桨已拆除，并且 ARM/ANGLE/BARO 按约定由 AUX 高值激活。测试油门固定 1000、AUX1–4 固定 1000，不开放解锁或升降。")
+    .setNegativeButton("取消",null).setPositiveButton("确认并开始",(d,w)->{if(active&&connected&&rxMap!=null&&SystemClock.elapsedRealtime()-lastReply<1500){rollInput=pitchInput=yawInput=1500;lastTouch=SystemClock.elapsedRealtime();testing=true;publish();}}).show();
+  });}
+  @JavascriptInterface public void sticks(int roll,int pitch,int yaw){if(!testing||!active)return;rollInput=Math.max(1400,Math.min(1600,roll));pitchInput=Math.max(1400,Math.min(1600,pitch));yawInput=Math.max(1400,Math.min(1600,yaw));lastTouch=SystemClock.elapsedRealtime();}
+  @JavascriptInterface public void page(boolean control){if(!control)stopTesting();}
+
   @JavascriptInterface public void connect(){ui.post(()->choose());}
   @JavascriptInterface public void disconnect(){ui.post(()->MainActivity.this.disconnect("手动断开"));}
  }
  private void renderEvent(String event){if(web!=null)web.evaluateJavascript("window.nativeEvent&&window.nativeEvent("+JSONObject.quote(event)+")",null);}
  private void put(String k,Object v){synchronized(telemetry){try{telemetry.put(k,v);}catch(JSONException ignored){}}}
- private void publish(){String data;synchronized(telemetry){try{telemetry.put("connected",connected);telemetry.put("fresh",connected&&lastReply>0&&SystemClock.elapsedRealtime()-lastReply<1500);telemetry.put("log",logs.toString());}catch(JSONException ignored){}data=telemetry.toString();}if(web!=null)web.evaluateJavascript("window.nativeData&&window.nativeData("+data+")",null);}
+ private void publish(){String data;synchronized(telemetry){try{telemetry.put("testing",testing);telemetry.put("connected",connected);telemetry.put("fresh",connected&&lastReply>0&&SystemClock.elapsedRealtime()-lastReply<1500);telemetry.put("log",logs.toString());}catch(JSONException ignored){}data=telemetry.toString();}if(web!=null)web.evaluateJavascript("window.nativeData&&window.nativeData("+data+")",null);}
  private void addLog(String s){ui.post(()->{logs.append(s).append('\n');if(logs.length()>3000)logs.delete(0,logs.length()-2500);publish();});}
  private final Runnable loop=new Runnable(){public void run(){
   if(active&&connected){final int token=generation;final int cmd=new int[]{108,101,105,109,110}[tick++%5];
@@ -68,7 +90,7 @@ public class MainActivity extends Activity {
             final BluetoothSocket pending=s;
             ui.postDelayed(()->{if(token==generation&&connecting){disconnect("蓝牙连接超时");try{pending.close();}catch(Exception ignored){}}},12000);
             s.connect();
-            if(!active||token!=generation){s.close();return;}
+            if(!active||token!=generation){s.close();if(token==generation)disconnect("连接过程中进入后台，请重新连接");return;}
             connected=true;connecting=false;lastReply=0;ui.post(()->renderEvent("connected"));addLog("蓝牙 SPP 已连接，正在查询飞控");
             final BluetoothSocket current=s;
             new Thread(()->read(current,token),"msp-reader").start();
@@ -94,9 +116,9 @@ public class MainActivity extends Activity {
   if(c==110&&b.length>=1)put("voltage",(b[0]&255)/10.0);
   if(c==105){JSONArray a=new JSONArray();for(int i=0;i<Math.min(8,b.length/2);i++)a.put(Msp.u16(b,i*2));put("channels",a);}
  }
- private void disconnect(String reason){generation++;connected=false;connecting=false;rxMap=null;lastReply=0;BluetoothSocket s=socket;socket=null;if(s!=null)try{s.close();}catch(Exception ignored){}synchronized(telemetry){Iterator<String> keys=telemetry.keys();while(keys.hasNext()){keys.next();keys.remove();}}ui.post(()->{renderEvent("disconnected");addLog(reason);});}
+ private void disconnect(String reason){stopTesting();generation++;connected=false;connecting=false;rxMap=null;lastReply=0;BluetoothSocket s=socket;socket=null;if(s!=null)try{s.close();}catch(Exception ignored){}synchronized(telemetry){Iterator<String> keys=telemetry.keys();while(keys.hasNext()){keys.next();keys.remove();}}ui.post(()->{renderEvent("disconnected");addLog(reason);});}
  @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] results){super.onRequestPermissionsResult(request,permissions,results);if(request==7&&results.length>0&&results[0]==PackageManager.PERMISSION_GRANTED)choose();else addLog("请允许附近设备权限后再连接");}
  @Override public void onResume(){super.onResume();active=true;ui.removeCallbacks(loop);ui.post(loop);}
- @Override public void onPause(){active=false;ui.removeCallbacks(loop);disconnect("离开页面，蓝牙已断开；不会自动重连");super.onPause();}
- @Override public void onDestroy(){worker.shutdownNow();web.removeJavascriptInterface("Native");web.destroy();web=null;super.onDestroy();}
+ @Override public void onPause(){active=false;ui.removeCallbacks(loop);stopTesting();super.onPause();}
+ @Override public void onDestroy(){disconnect("应用关闭");rcWorker.shutdownNow();worker.shutdownNow();web.removeJavascriptInterface("Native");web.destroy();web=null;super.onDestroy();}
 }

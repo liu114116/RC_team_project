@@ -23,8 +23,11 @@ public final class Msp {
         return true;
     }
     public static byte[] benchChannels(byte[] map, int roll, int pitch) {
+        return benchChannels(map,roll,pitch,1500);
+    }
+    public static byte[] benchChannels(byte[] map, int roll, int pitch, int yaw) {
         if (!validMap(map)) throw new IllegalArgumentException("Invalid RX map");
-        int[] logical = {Math.max(1400,Math.min(1600,roll)), Math.max(1400,Math.min(1600,pitch)),1500,1000,1000,1000,1000,1000};
+        int[] logical = {Math.max(1400,Math.min(1600,roll)), Math.max(1400,Math.min(1600,pitch)),Math.max(1400,Math.min(1600,yaw)),1000,1000,1000,1000,1000};
         byte[] b = new byte[16];
         for(int i=0;i<8;i++) { int j=map[i]*2, v=logical[i]; b[j]=(byte)v; b[j+1]=(byte)(v>>8); }
         return b;
